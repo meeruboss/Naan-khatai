@@ -8,6 +8,16 @@ const overlayTitle = document.querySelector("#overlayTitle");
 const overlayText = document.querySelector("#overlayText");
 const startButton = document.querySelector("#startButton");
 
+const sounds = {
+  crunch: new Audio("assets/audio/crunch.mp3"),
+  startEnd: new Audio("assets/audio/start-end.m4a"),
+};
+
+sounds.crunch.preload = "auto";
+sounds.startEnd.preload = "auto";
+sounds.crunch.volume = 0.82;
+sounds.startEnd.volume = 0.86;
+
 const CONFIG = {
   groundHeight: 76,
   cookieMinSpeed: 118,
@@ -64,6 +74,7 @@ function fitCanvas() {
 
 function resetGame() {
   fitCanvas();
+  playSound(sounds.startEnd);
   state.mode = "playing";
   state.time = 0;
   state.lastTime = performance.now();
@@ -148,6 +159,7 @@ function update(dt) {
         localStorage.setItem("naanKhataiBest", String(state.best));
       }
       player.mouth = 1;
+      playSound(sounds.crunch, true);
       syncHud();
       continue;
     }
@@ -201,6 +213,7 @@ function updateCrumbs(dt) {
 
 function gameOver() {
   state.mode = "over";
+  playSound(sounds.startEnd);
   state.best = Math.max(state.best, state.score);
   localStorage.setItem("naanKhataiBest", String(state.best));
   syncHud();
@@ -447,6 +460,12 @@ function clamp(value, min, max) {
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
+}
+
+function playSound(sound, clone = false) {
+  const audio = clone ? sound.cloneNode() : sound;
+  audio.currentTime = 0;
+  audio.play().catch(() => {});
 }
 
 startButton.addEventListener("click", resetGame);
