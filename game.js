@@ -2,179 +2,276 @@ const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
 const scoreEl = document.querySelector("#score");
 const missesEl = document.querySelector("#misses");
+const overlay = document.querySelector("#overlay");
+const overlayTitle = document.querySelector("#overlayTitle");
+const overlayText = document.querySelector("#overlayText");
 const startButton = document.querySelector("#startButton");
-const leftButton = document.querySelector("#leftButton");
-const rightButton = document.querySelector("#rightButton");
 
-const keys = new Set();
-const pointerControls = { left: false, right: false };
-
-const game = {
-  running: false,
-  over: false,
-  score: 0,
-  misses: 0,
-  lastTime: 0,
-  spawnTimer: 0,
-  windTimer: 0,
-  wind: 0,
-  cookies: [],
-  player: {
-    x: canvas.width / 2,
-    y: canvas.height - 118,
-    width: 108,
-    height: 124,
-    speed: 520,
-    mouthOpen: 0,
-  },
+const CONFIG = {
+  groundHeight: 76,
+  cookieMinSpeed: 118,
+  cookieMaxBoost: 118,
+  cookieBaseInterval: 1.45,
+  cookieFastInterval: 0.9,
+  playerBaseSpeed: 410,
+  playerBoost: 150,
 };
 
+const keys = new Set();
+const pointer = { active: false, direction: 0 };
+
+const state = {
+  mode: "ready",
+  width: canvas.width,
+  height: canvas.height,
+  dpr: 1,
+  time: 0,
+  lastTime: 0,
+  score: 0,
+  misses: 0,
+  spawnTimer: 0,
+  shake: 0,
+  player: {
+    x: 240,
+    y: 600,
+    width: 58,
+    height: 96,
+    mouth: 0,
+    look: 0,
+    stride: 0,
+  },
+  cookies: [],
+  crumbs: [],
+};
+
+function difficulty() {
+  return Math.min(state.score / 36, 1);
+}
+
+function fitCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  state.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(rect.width * state.dpr);
+  canvas.height = Math.round(rect.height * state.dpr);
+  state.width = rect.width;
+  state.height = rect.height;
+  ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+  state.player.y = state.height - CONFIG.groundHeight - 48;
+  state.player.x = clamp(state.player.x, 42, state.width - 42);
+}
+
 function resetGame() {
-  game.running = true;
-  game.over = false;
-  game.score = 0;
-  game.misses = 0;
-  game.lastTime = performance.now();
-  game.spawnTimer = 0.55;
-  game.windTimer = 0;
-  game.wind = 0;
-  game.cookies = [];
-  game.player.x = canvas.width / 2;
-  game.player.mouthOpen = 0;
-  startButton.textContent = "Restart";
+  fitCanvas();
+  state.mode = "playing";
+  state.time = 0;
+  state.lastTime = performance.now();
+  state.score = 0;
+  state.misses = 0;
+  state.spawnTimer = 0.55;
+  state.shake = 0;
+  state.cookies = [];
+  state.crumbs = [];
+  state.player.x = state.width / 2;
+  state.player.mouth = 0;
+  state.player.look = 0;
+  overlay.classList.add("hidden");
+  startButton.textContent = "Play Again";
   syncHud();
 }
 
 function syncHud() {
-  scoreEl.textContent = game.score;
-  missesEl.textContent = game.misses;
-}
-
-function difficulty() {
-  return Math.min(game.score / 35, 1);
+  scoreEl.textContent = String(state.score);
+  missesEl.textContent = `Miss ${state.misses}/3`;
 }
 
 function spawnCookie() {
   const d = difficulty();
-  const radius = 23 + Math.random() * 8;
-  game.cookies.push({
-    x: radius + Math.random() * (canvas.width - radius * 2),
-    y: -radius,
+  const radius = 17 + Math.random() * 5;
+  state.cookies.push({
+    x: radius + Math.random() * (state.width - radius * 2),
+    y: -radius - 8,
     radius,
-    speed: 145 + d * 185 + Math.random() * 50,
+    speed: CONFIG.cookieMinSpeed + d * CONFIG.cookieMaxBoost + Math.random() * 28,
+    drift: (Math.random() - 0.5) * 34,
     spin: Math.random() * Math.PI * 2,
     spinSpeed: (Math.random() - 0.5) * 4,
-    drift: (Math.random() - 0.5) * 35,
   });
 }
 
-function update(delta) {
-  if (!game.running) return;
+function update(dt) {
+  state.time += dt;
 
-  const player = game.player;
-  const moveLeft = keys.has("ArrowLeft") || keys.has("a") || pointerControls.left;
-  const moveRight = keys.has("ArrowRight") || keys.has("d") || pointerControls.right;
+  if (state.mode !== "playing") {
+    updateCrumbs(dt);
+    return;
+  }
+
+  const d = difficulty();
+  const moveLeft = keys.has("ArrowLeft") || keys.has("a") || pointer.direction < 0;
+  const moveRight = keys.has("ArrowRight") || keys.has("d") || pointer.direction > 0;
   const direction = Number(moveRight) - Number(moveLeft);
+  const player = state.player;
 
-  player.x += direction * player.speed * delta;
-  player.x = clamp(player.x, player.width / 2, canvas.width - player.width / 2);
-  player.mouthOpen = Math.max(0, player.mouthOpen - delta * 4);
+  player.x += direction * (CONFIG.playerBaseSpeed + d * CONFIG.playerBoost) * dt;
+  player.x = clamp(player.x, 42, state.width - 42);
+  player.stride += Math.abs(direction) * dt * 15;
+  player.mouth = Math.max(0, player.mouth - dt * 4.8);
 
-  game.windTimer -= delta;
-  if (game.windTimer <= 0) {
-    game.windTimer = 1.4 + Math.random() * 1.8;
-    game.wind = (Math.random() - 0.5) * 34;
-  }
+  const lookingCookie = state.cookies.some((cookie) => {
+    const closeX = Math.abs(cookie.x - player.x) < 62;
+    const above = cookie.y > 90 && cookie.y < player.y + 34;
+    return closeX && above;
+  });
+  player.look += ((lookingCookie || player.mouth > 0.05 ? 1 : 0) - player.look) * Math.min(1, dt * 9);
 
-  game.spawnTimer -= delta;
-  if (game.spawnTimer <= 0) {
+  state.spawnTimer -= dt;
+  if (state.spawnTimer <= 0) {
     spawnCookie();
-    game.spawnTimer = Math.max(0.48, 1.05 - difficulty() * 0.36) + Math.random() * 0.2;
+    state.spawnTimer = lerp(CONFIG.cookieBaseInterval, CONFIG.cookieFastInterval, d) + Math.random() * 0.2;
   }
 
-  for (let i = game.cookies.length - 1; i >= 0; i -= 1) {
-    const cookie = game.cookies[i];
-    cookie.y += cookie.speed * delta;
-    cookie.x += (cookie.drift + game.wind) * delta;
-    cookie.spin += cookie.spinSpeed * delta;
+  for (let i = state.cookies.length - 1; i >= 0; i -= 1) {
+    const cookie = state.cookies[i];
+    cookie.y += cookie.speed * dt;
+    cookie.x += cookie.drift * dt;
+    cookie.spin += cookie.spinSpeed * dt;
 
-    if (cookie.x < cookie.radius || cookie.x > canvas.width - cookie.radius) {
+    if (cookie.x < cookie.radius || cookie.x > state.width - cookie.radius) {
       cookie.drift *= -1;
-      cookie.x = clamp(cookie.x, cookie.radius, canvas.width - cookie.radius);
+      cookie.x = clamp(cookie.x, cookie.radius, state.width - cookie.radius);
     }
 
-    if (cookieHitsMouth(cookie)) {
-      game.cookies.splice(i, 1);
-      game.score += 1;
-      player.mouthOpen = 1;
+    if (hitsMouth(cookie)) {
+      burstCrumbs(cookie.x, cookie.y);
+      state.cookies.splice(i, 1);
+      state.score += 1;
+      player.mouth = 1;
       syncHud();
       continue;
     }
 
-    if (cookie.y - cookie.radius > canvas.height) {
-      game.cookies.splice(i, 1);
-      game.misses += 1;
+    if (cookie.y - cookie.radius > state.height - CONFIG.groundHeight + 12) {
+      state.cookies.splice(i, 1);
+      state.misses += 1;
+      state.shake = 8;
+      burstCrumbs(cookie.x, state.height - CONFIG.groundHeight + 6);
       syncHud();
-      if (game.misses >= 3) {
-        game.running = false;
-        game.over = true;
-        startButton.textContent = "Try again";
-      }
+      if (state.misses >= 3) gameOver();
     }
   }
+
+  updateCrumbs(dt);
+  state.shake = Math.max(0, state.shake - dt * 42);
 }
 
-function cookieHitsMouth(cookie) {
-  const player = game.player;
-  const mouthX = player.x;
-  const mouthY = player.y + 44;
-  const catchWidth = player.width * 0.62;
-  const catchHeight = 38;
+function hitsMouth(cookie) {
+  const p = state.player;
+  const mouthX = p.x + 3;
+  const mouthY = p.y - 30 - p.look * 8;
   return (
-    Math.abs(cookie.x - mouthX) < catchWidth / 2 + cookie.radius * 0.45 &&
-    Math.abs(cookie.y - mouthY) < catchHeight / 2 + cookie.radius * 0.45
+    Math.abs(cookie.x - mouthX) < 30 + cookie.radius * 0.35 &&
+    Math.abs(cookie.y - mouthY) < 24 + cookie.radius * 0.35
   );
 }
 
-function draw() {
-  drawScene();
-  drawKid();
-  game.cookies.forEach(drawCookie);
-
-  if (!game.running) {
-    drawOverlay(game.over ? "Game over" : "Catch the naan-khatai");
+function burstCrumbs(x, y) {
+  for (let i = 0; i < 10; i += 1) {
+    state.crumbs.push({
+      x,
+      y,
+      vx: -90 + Math.random() * 180,
+      vy: -130 + Math.random() * 130,
+      life: 0.4 + Math.random() * 0.2,
+      size: 2 + Math.random() * 2.5,
+    });
   }
 }
 
-function drawScene() {
-  const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  sky.addColorStop(0, "#8fd4f2");
-  sky.addColorStop(0.62, "#f7d797");
-  sky.addColorStop(1, "#79ad70");
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+function updateCrumbs(dt) {
+  for (const crumb of state.crumbs) {
+    crumb.x += crumb.vx * dt;
+    crumb.y += crumb.vy * dt;
+    crumb.vy += 420 * dt;
+    crumb.life -= dt;
+  }
+  state.crumbs = state.crumbs.filter((crumb) => crumb.life > 0);
+}
 
-  ctx.fillStyle = "rgba(255, 255, 255, 0.82)";
-  drawCloud(150, 90, 1);
-  drawCloud(740, 120, 0.8);
-  drawCloud(490, 62, 0.58);
+function gameOver() {
+  state.mode = "over";
+  overlayTitle.textContent = "Game Over";
+  overlayText.textContent = `${state.score} naan-khatai eaten.`;
+  overlay.classList.remove("hidden");
+}
 
-  ctx.fillStyle = "#347d58";
-  ctx.fillRect(0, canvas.height - 54, canvas.width, 54);
+function draw() {
+  ctx.save();
+  ctx.clearRect(0, 0, state.width, state.height);
+  if (state.shake > 0) {
+    ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
+  }
+  drawSky();
+  drawStands();
+  drawCookies();
+  drawCrumbs();
+  drawKid();
+  drawGround();
+  ctx.restore();
+}
 
-  ctx.fillStyle = "rgba(255, 247, 232, 0.36)";
-  for (let x = 18; x < canvas.width; x += 48) {
-    ctx.fillRect(x, canvas.height - 36, 24, 5);
+function drawSky() {
+  const gradient = ctx.createLinearGradient(0, 0, 0, state.height);
+  gradient.addColorStop(0, "#5fc1ee");
+  gradient.addColorStop(0.54, "#a9e0f3");
+  gradient.addColorStop(1, "#d7f5dc");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, state.width, state.height);
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.62)";
+  for (let i = 0; i < 5; i += 1) {
+    const x = ((state.time * 18 + i * 150) % (state.width + 180)) - 120;
+    const y = 72 + (i % 3) * 58;
+    drawCloud(x, y, 1 + (i % 2) * 0.28);
   }
 }
 
 function drawCloud(x, y, scale) {
   ctx.beginPath();
-  ctx.arc(x, y, 34 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 42 * scale, y - 12 * scale, 46 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 89 * scale, y, 33 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 42 * scale, y + 16 * scale, 38 * scale, 0, Math.PI * 2);
+  ctx.ellipse(x, y, 34 * scale, 18 * scale, 0, 0, Math.PI * 2);
+  ctx.ellipse(x + 28 * scale, y - 8 * scale, 28 * scale, 21 * scale, 0, 0, Math.PI * 2);
+  ctx.ellipse(x + 58 * scale, y, 36 * scale, 18 * scale, 0, 0, Math.PI * 2);
   ctx.fill();
+}
+
+function drawStands() {
+  const baseY = state.height - CONFIG.groundHeight - 58;
+  ctx.fillStyle = "rgba(20, 43, 70, 0.36)";
+  ctx.fillRect(0, baseY, state.width, 58);
+  for (let x = -20; x < state.width + 20; x += 34) {
+    const palette = ["#1f4fa3", "#f36f21", "#f7efe2", "#21633d"];
+    ctx.fillStyle = palette[Math.abs(Math.floor(x / 34)) % palette.length];
+    ctx.fillRect(x, baseY + 11 + ((x / 34) % 2) * 8, 22, 18);
+  }
+}
+
+function drawGround() {
+  const y = state.height - CONFIG.groundHeight;
+  ctx.fillStyle = "#287b46";
+  ctx.fillRect(0, y, state.width, CONFIG.groundHeight);
+  ctx.fillStyle = "#236d3d";
+  for (let x = -20; x < state.width + 30; x += 38) {
+    ctx.beginPath();
+    ctx.moveTo(x, state.height);
+    ctx.lineTo(x + 18, y);
+    ctx.lineTo(x + 38, state.height);
+    ctx.fill();
+  }
+  ctx.fillStyle = "rgba(247, 239, 226, 0.72)";
+  ctx.fillRect(0, y + 8, state.width, 4);
+}
+
+function drawCookies() {
+  for (const cookie of state.cookies) drawCookie(cookie);
 }
 
 function drawCookie(cookie) {
@@ -182,144 +279,188 @@ function drawCookie(cookie) {
   ctx.translate(cookie.x, cookie.y);
   ctx.rotate(cookie.spin);
 
-  const cookieGradient = ctx.createRadialGradient(
-    -cookie.radius * 0.25,
-    -cookie.radius * 0.25,
-    cookie.radius * 0.2,
-    0,
-    0,
-    cookie.radius,
-  );
-  cookieGradient.addColorStop(0, "#fff0c6");
-  cookieGradient.addColorStop(0.68, "#d9b16e");
-  cookieGradient.addColorStop(1, "#a56f3e");
-  ctx.fillStyle = cookieGradient;
+  const gradient = ctx.createRadialGradient(-6, -7, 3, 0, 0, cookie.radius);
+  gradient.addColorStop(0, "#fff1c9");
+  gradient.addColorStop(0.7, "#d9ad68");
+  gradient.addColorStop(1, "#9b6335");
+  ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(0, 0, cookie.radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(112, 72, 40, 0.45)";
-  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(95, 55, 26, 0.42)";
+  ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(0, 0, cookie.radius * 0.72, 0, Math.PI * 2);
+  ctx.arc(0, 0, cookie.radius * 0.68, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.fillStyle = "rgba(112, 72, 40, 0.48)";
-  for (let i = 0; i < 6; i += 1) {
-    const angle = (Math.PI * 2 * i) / 6;
+  ctx.fillStyle = "rgba(92, 54, 28, 0.5)";
+  for (let i = 0; i < 5; i += 1) {
+    const angle = (Math.PI * 2 * i) / 5;
     ctx.beginPath();
-    ctx.arc(Math.cos(angle) * cookie.radius * 0.42, Math.sin(angle) * cookie.radius * 0.42, 3.2, 0, Math.PI * 2);
+    ctx.arc(Math.cos(angle) * cookie.radius * 0.38, Math.sin(angle) * cookie.radius * 0.38, 2.2, 0, Math.PI * 2);
     ctx.fill();
   }
 
   ctx.restore();
 }
 
+function drawCrumbs() {
+  for (const crumb of state.crumbs) {
+    ctx.globalAlpha = Math.max(0, crumb.life / 0.55);
+    ctx.fillStyle = "#e1b06c";
+    ctx.beginPath();
+    ctx.arc(crumb.x, crumb.y, crumb.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawKid() {
-  const p = game.player;
+  const p = state.player;
   ctx.save();
   ctx.translate(p.x, p.y);
 
-  ctx.fillStyle = "#246a56";
-  roundRect(-46, 58, 92, 64, 22);
-  ctx.fill();
-
-  ctx.fillStyle = "#f4b572";
-  roundRect(-35, -18, 70, 80, 30);
-  ctx.fill();
-
-  ctx.fillStyle = "#2b1b16";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
   ctx.beginPath();
-  ctx.arc(-16, 13, 5, 0, Math.PI * 2);
-  ctx.arc(16, 13, 5, 0, Math.PI * 2);
+  ctx.ellipse(2, 48, 31, 8, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = "#2b1b16";
-  ctx.beginPath();
-  ctx.ellipse(0, 39, 13 + p.mouthOpen * 10, 6 + p.mouthOpen * 13, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = "#23140f";
-  ctx.beginPath();
-  ctx.arc(0, -7, 39, Math.PI, Math.PI * 2);
-  ctx.quadraticCurveTo(36, -28, 24, -43);
-  ctx.quadraticCurveTo(4, -31, -24, -40);
-  ctx.quadraticCurveTo(-43, -29, -39, -7);
-  ctx.fill();
-
-  ctx.strokeStyle = "#f4b572";
-  ctx.lineWidth = 16;
+  const legOffset = Math.sin(p.stride) * 7;
+  ctx.strokeStyle = "#1f4fa3";
+  ctx.lineWidth = 13;
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(-42, 73);
-  ctx.lineTo(-72, 92);
-  ctx.moveTo(42, 73);
-  ctx.lineTo(72, 92);
+  ctx.moveTo(-13, 28);
+  ctx.lineTo(-21 - legOffset, 50);
+  ctx.moveTo(13, 28);
+  ctx.lineTo(21 + legOffset, 50);
   ctx.stroke();
 
+  ctx.fillStyle = "#1f4fa3";
+  roundRect(-27, -7, 54, 44, 12);
+  ctx.fill();
+  ctx.fillStyle = "#f36f21";
+  ctx.fillRect(-24, 8, 48, 5);
+  ctx.fillRect(-7, -5, 14, 39);
+
+  ctx.strokeStyle = "#f1b384";
+  ctx.lineWidth = 11;
+  ctx.beginPath();
+  ctx.moveTo(-25, 3);
+  ctx.lineTo(-39, 17);
+  ctx.moveTo(25, 3);
+  ctx.lineTo(39, 17);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(0, -33);
+  ctx.rotate(-0.27 * p.look);
+
+  ctx.fillStyle = "#f1b384";
+  ctx.beginPath();
+  ctx.arc(0, 0, 23, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#191413";
+  ctx.beginPath();
+  ctx.arc(0, -9, 24, Math.PI, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(247, 239, 226, 0.22)";
+  ctx.fillRect(-23, -8, 7, 10);
+  ctx.fillRect(16, -8, 7, 10);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(-8, 1 - p.look * 3, 4, 0, Math.PI * 2);
+  ctx.arc(9, 1 - p.look * 3, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#171717";
+  ctx.beginPath();
+  ctx.arc(-7, 0 - p.look * 3, 1.8, 0, Math.PI * 2);
+  ctx.arc(10, 0 - p.look * 3, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#24140f";
+  ctx.beginPath();
+  ctx.ellipse(2, 10 - p.look * 7, 7 + p.mouth * 8, 3 + p.mouth * 10, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
-}
 
-function drawOverlay(title) {
-  ctx.fillStyle = "rgba(39, 26, 20, 0.42)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "#fff7e8";
+  ctx.fillStyle = "#f7efe2";
+  ctx.font = "900 13px Inter, system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = "900 52px Inter, system-ui, sans-serif";
-  ctx.fillText(title, canvas.width / 2, canvas.height / 2 - 40);
-  ctx.font = "800 24px Inter, system-ui, sans-serif";
-  ctx.fillText(game.over ? `Final score: ${game.score}` : "Ready?", canvas.width / 2, canvas.height / 2 + 24);
+  ctx.fillText("18", 0, 18);
+  ctx.restore();
 }
 
 function roundRect(x, y, width, height, radius) {
   ctx.beginPath();
   ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + width, y, x + width, y + height, radius);
-  ctx.arcTo(x + width, y + height, x, y + height, radius);
-  ctx.arcTo(x, y + height, x, y, radius);
-  ctx.arcTo(x, y, x + width, y, radius);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
   ctx.closePath();
+}
+
+function setPointerDirection(event) {
+  pointer.active = true;
+  pointer.direction = event.clientX < window.innerWidth / 2 ? -1 : 1;
+}
+
+function clearPointer() {
+  pointer.active = false;
+  pointer.direction = 0;
+}
+
+function loop(now) {
+  const dt = Math.min(0.032, (now - state.lastTime) / 1000 || 0);
+  state.lastTime = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
 }
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function frame(now) {
-  const delta = Math.min((now - game.lastTime) / 1000 || 0, 0.033);
-  game.lastTime = now;
-  update(delta);
-  draw();
-  requestAnimationFrame(frame);
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
-function bindHoldButton(button, direction) {
-  const set = (active) => {
-    pointerControls[direction] = active;
-  };
-  button.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    button.setPointerCapture(event.pointerId);
-    set(true);
-  });
-  button.addEventListener("pointerup", () => set(false));
-  button.addEventListener("pointercancel", () => set(false));
-  button.addEventListener("pointerleave", () => set(false));
-}
-
+startButton.addEventListener("click", resetGame);
+document.addEventListener("pointerdown", (event) => {
+  if (event.target === startButton) return;
+  if (state.mode !== "playing") {
+    resetGame();
+    return;
+  }
+  event.preventDefault();
+  setPointerDirection(event);
+});
+document.addEventListener("pointermove", (event) => {
+  if (pointer.active) setPointerDirection(event);
+});
+document.addEventListener("pointerup", clearPointer);
+document.addEventListener("pointercancel", clearPointer);
 window.addEventListener("keydown", (event) => {
-  keys.add(event.key);
   if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
     resetGame();
   }
+  keys.add(event.key);
 });
-
 window.addEventListener("keyup", (event) => keys.delete(event.key));
-startButton.addEventListener("click", resetGame);
-bindHoldButton(leftButton, "left");
-bindHoldButton(rightButton, "right");
+window.addEventListener("resize", fitCanvas);
 
+fitCanvas();
+syncHud();
 draw();
-requestAnimationFrame(frame);
+requestAnimationFrame(loop);
