@@ -1,6 +1,7 @@
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
 const scoreEl = document.querySelector("#score");
+const bestEl = document.querySelector("#best");
 const missesEl = document.querySelector("#misses");
 const overlay = document.querySelector("#overlay");
 const overlayTitle = document.querySelector("#overlayTitle");
@@ -28,6 +29,7 @@ const state = {
   time: 0,
   lastTime: 0,
   score: 0,
+  best: Number(localStorage.getItem("naanKhataiBest") || 0),
   misses: 0,
   spawnTimer: 0,
   shake: 0,
@@ -81,6 +83,7 @@ function resetGame() {
 
 function syncHud() {
   scoreEl.textContent = String(state.score);
+  bestEl.textContent = `Best ${state.best}`;
   missesEl.textContent = `Miss ${state.misses}/3`;
 }
 
@@ -117,12 +120,7 @@ function update(dt) {
   player.stride += Math.abs(direction) * dt * 15;
   player.mouth = Math.max(0, player.mouth - dt * 4.8);
 
-  const lookingCookie = state.cookies.some((cookie) => {
-    const closeX = Math.abs(cookie.x - player.x) < 62;
-    const above = cookie.y > 90 && cookie.y < player.y + 34;
-    return closeX && above;
-  });
-  player.look += ((lookingCookie || player.mouth > 0.05 ? 1 : 0) - player.look) * Math.min(1, dt * 9);
+  player.look += ((player.mouth > 0.05 ? 1 : 0) - player.look) * Math.min(1, dt * 11);
 
   state.spawnTimer -= dt;
   if (state.spawnTimer <= 0) {
@@ -145,6 +143,10 @@ function update(dt) {
       burstCrumbs(cookie.x, cookie.y);
       state.cookies.splice(i, 1);
       state.score += 1;
+      if (state.score > state.best) {
+        state.best = state.score;
+        localStorage.setItem("naanKhataiBest", String(state.best));
+      }
       player.mouth = 1;
       syncHud();
       continue;
@@ -199,6 +201,9 @@ function updateCrumbs(dt) {
 
 function gameOver() {
   state.mode = "over";
+  state.best = Math.max(state.best, state.score);
+  localStorage.setItem("naanKhataiBest", String(state.best));
+  syncHud();
   overlayTitle.textContent = "Game Over";
   overlayText.textContent = `${state.score} naan-khatai eaten.`;
   overlay.classList.remove("hidden");
@@ -211,7 +216,7 @@ function draw() {
     ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
   }
   drawSky();
-  drawStands();
+  drawFence();
   drawCookies();
   drawCrumbs();
   drawKid();
@@ -243,14 +248,28 @@ function drawCloud(x, y, scale) {
   ctx.fill();
 }
 
-function drawStands() {
+function drawFence() {
   const baseY = state.height - CONFIG.groundHeight - 58;
-  ctx.fillStyle = "rgba(20, 43, 70, 0.36)";
-  ctx.fillRect(0, baseY, state.width, 58);
-  for (let x = -20; x < state.width + 20; x += 34) {
-    const palette = ["#1f4fa3", "#f36f21", "#f7efe2", "#21633d"];
-    ctx.fillStyle = palette[Math.abs(Math.floor(x / 34)) % palette.length];
-    ctx.fillRect(x, baseY + 11 + ((x / 34) % 2) * 8, 22, 18);
+  ctx.fillStyle = "rgba(72, 119, 72, 0.22)";
+  ctx.fillRect(0, baseY + 18, state.width, 40);
+
+  ctx.strokeStyle = "rgba(117, 83, 48, 0.62)";
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-10, baseY + 34);
+  ctx.lineTo(state.width + 10, baseY + 34);
+  ctx.moveTo(-10, baseY + 51);
+  ctx.lineTo(state.width + 10, baseY + 51);
+  ctx.stroke();
+
+  ctx.fillStyle = "#8b5a32";
+  for (let x = -8; x < state.width + 20; x += 34) {
+    roundRect(x, baseY + 11, 10, 52, 4);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+    ctx.fillRect(x + 2, baseY + 16, 2, 39);
+    ctx.fillStyle = "#8b5a32";
   }
 }
 
@@ -327,7 +346,7 @@ function drawKid() {
   ctx.fill();
 
   const legOffset = Math.sin(p.stride) * 7;
-  ctx.strokeStyle = "#1f4fa3";
+  ctx.strokeStyle = "#30445f";
   ctx.lineWidth = 13;
   ctx.lineCap = "round";
   ctx.beginPath();
@@ -337,12 +356,12 @@ function drawKid() {
   ctx.lineTo(21 + legOffset, 50);
   ctx.stroke();
 
-  ctx.fillStyle = "#1f4fa3";
+  ctx.fillStyle = "#ffd15a";
   roundRect(-27, -7, 54, 44, 12);
   ctx.fill();
-  ctx.fillStyle = "#f36f21";
-  ctx.fillRect(-24, 8, 48, 5);
-  ctx.fillRect(-7, -5, 14, 39);
+  ctx.fillStyle = "#6fb3e8";
+  roundRect(-22, -1, 44, 32, 9);
+  ctx.fill();
 
   ctx.strokeStyle = "#f1b384";
   ctx.lineWidth = 11;
@@ -387,11 +406,6 @@ function drawKid() {
   ctx.fill();
   ctx.restore();
 
-  ctx.fillStyle = "#f7efe2";
-  ctx.font = "900 13px Inter, system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("18", 0, 18);
   ctx.restore();
 }
 

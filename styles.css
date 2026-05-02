@@ -12,6 +12,7 @@
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -24,6 +25,8 @@ body {
     radial-gradient(circle at 20% 12%, rgba(246, 196, 79, 0.28), transparent 28%),
     linear-gradient(135deg, #0c1930 0%, #101821 48%, #1c382f 100%);
   color: var(--paper);
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 .shell {
@@ -67,7 +70,7 @@ footer {
 }
 
 .scorebox {
-  min-width: 62px;
+  min-width: 60px;
   border: 1px solid rgba(247, 239, 226, 0.24);
   border-radius: 8px;
   padding: 7px 10px;
@@ -93,6 +96,8 @@ canvas {
   min-height: 580px;
   cursor: pointer;
   touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .overlay {
